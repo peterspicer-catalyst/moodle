@@ -37,6 +37,11 @@ if ($ADMIN->fulltree) {
     $settings->add(new admin_setting_configtext('auth_shibboleth/user_attribute', get_string('username'),
             get_string('auth_shib_username_description', 'auth_shibboleth'), '', PARAM_RAW));
 
+    // Authenticate in background.
+    $settings->add(new admin_setting_configcheckbox('auth_shibboleth/auth_background',
+            get_string('auth_shibboleth_background', 'auth_shibboleth'),
+            get_string('auth_shibboleth_background_description', 'auth_shibboleth'), ''));
+
     // COnvert Data configuration file.
     $settings->add(new admin_setting_configfile('auth_shibboleth/convert_data',
             get_string('auth_shib_convert_data', 'auth_shibboleth'),
