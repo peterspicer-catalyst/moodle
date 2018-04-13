@@ -35,6 +35,9 @@ require_once($CFG->libdir.'/authlib.php');
  */
 class auth_plugin_shibboleth extends auth_plugin_base {
 
+    /** @var bool Whether we have come from the background processing route or not. */
+    private $frombackground = false;
+
     /**
      * Constructor.
      */
@@ -62,7 +65,7 @@ class auth_plugin_shibboleth extends auth_plugin_base {
      * @return bool Authentication success or failure.
      */
     function user_login($username, $password) {
-       global $SESSION;
+        global $SESSION, $CFG;
 
         // If we are in the shibboleth directory then we trust the server var
         if (!empty($_SERVER[$this->config->user_attribute])) {
@@ -84,6 +87,174 @@ class auth_plugin_shibboleth extends auth_plugin_base {
             $SESSION->shibboleth_session_id  = $sessionkey;
 
             return (strtolower($_SERVER[$this->config->user_attribute]) == strtolower($username));
+        } else if (!empty($this->config->auth_background) && optional_param('service', '', PARAM_ALPHANUMEXT)) {
+            // We need to try to authenticate to the IdP. This may not end well, but let's try.
+            // 1. Visit our login page to redirect to the IdP login page.
+            require_once($CFG->libdir . '/filelib.php');
+
+            $cookiefile = $CFG->dataroot . '/' . uniqid('shibcurlcookie', true) . '.txt';
+
+            $curl = new curl(array('cookie' => $cookiefile));
+            $url = new moodle_url('/auth/shibboleth/index.php'); // This should be Shibbolized already.
+            $options = array(
+                'FRESH_CONNECT'     => true,
+                'RETURNTRANSFER'    => true,
+                'FORBID_REUSE'      => true,
+                'HEADER'            => 0,
+                'CONNECTTIMEOUT'    => 3,
+                'FOLLOWLOCATION'    => true,
+            );
+            $loginpage = $curl->get($url, array(), $options);
+            $loginpageinfo = $curl->get_info();
+
+            $remote = getremoteaddr();
+
+            if (empty($loginpage)) {
+                debugging("[client $remote]  $CFG->wwwroot  Failed background login from Shibboleth", DEBUG_DEVELOPER);
+                @unlink($cookiefile);
+                return false; // Nothing back?
+            }
+
+            // 2. Try to find the login form.
+            $dom = new DOMDocument();
+            if (!$dom->loadHTML($loginpage)) {
+                debugging("[client $remote]  $CFG->wwwroot  Invalid background login page from Shibboleth", DEBUG_DEVELOPER);
+                @unlink($cookiefile);
+                return false; // Couldn't load the page...
+            }
+
+            // This is super icky. We're looking essentially for a form that has a text and a password element.
+            // And grabbing all other elements as we go.
+            $validform = false;
+            foreach ($dom->getElementsByTagName('form') as $form) {
+                $formvalues  = array();
+                $haspassword = false;
+                $hasinput    = false;
+                $formurl     = $form->getAttribute('action');
+
+                // Fetch buttons first.
+                foreach ($form->getElementsByTagName('button') as $button) {
+                    if ($button->getAttribute('name') && strtolower($button->getAttribute('name')) != 'cancel') {
+                        $formvalues[$button->getAttribute('name')] = $button->getAttribute('value');
+                    }
+                }
+
+                // Fetch inputs next, and try to sift out what's going on with them.
+                foreach ($form->getElementsByTagName('input') as $input) {
+                    switch ($input->getAttribute('type')) {
+                        case 'password':
+                            // So we have a password field. Did we already have one?
+                            if (empty($haspassword)) {
+                                $haspassword = $input->getAttribute('name');
+                            } else {
+                                // This isn't it. Skip to the next possible form.
+                                $haspassword = false;
+                                debugging("[client $remote]  $CFG->wwwroot  Form has two password items", DEBUG_DEVELOPER);
+                                break 2;
+                            }
+                            break;
+
+                        case 'text':
+                        case 'email':
+                            if (empty($hasinput)) {
+                                $hasinput = $input->getAttribute('name');
+                            } else {
+                                // This isn't it. Skip to the next form.
+                                $hasinput = false;
+                                debugging("[client $remote]  $CFG->wwwroot  Form has multiple text fields", DEBUG_DEVELOPER);
+                                break 2;
+                            }
+                            break;
+
+                        case 'reset':
+                            continue;
+                            break;
+
+                        case 'checkbox':
+                            if ($input->getAttribute('name') && $this->hasAttribute('checked')) {
+                                $value = $input->getAttribute('value');
+                                if (empty($value)) {
+                                    $value = 'on';
+                                }
+                                $formvalues[$input->getAttribute('name')] = $value;
+                            }
+                            break;
+
+                        default:
+                            // Anything else, we just pass through its value.
+                            if ($input->getAttribute('name') && strtolower($input->getAttribute('name')) != 'cancel') {
+                                $formvalues[$input->getAttribute('name')] = $input->getAttribute('value');
+                            }
+                            break;
+                    }
+                }
+
+                // Did this form make sense?
+                if (!empty($formurl) && !empty($hasinput) && !empty($haspassword)) {
+                    $validform = true;
+                    break;
+                }
+            }
+
+            if (!$validform) {
+                debugging("[client $remote]  $CFG->wwwroot  Could not find login form from Shibboleth", DEBUG_DEVELOPER);
+                @unlink($cookiefile);
+                return false;
+            }
+
+            // 3. Submit the login form and see where we get redirected back to.
+            // 3a. We probably only got a partial URL from the form. Let's fix that.
+            if (strpos($formurl, '//') === 0) {
+                $formurl = 'https' . $formurl;
+            } else if ($formurl[0] == '/') {
+                $urlparts = parse_url($loginpageinfo['url']);
+                $domain = !empty($urlparts['scheme']) ? $urlparts['scheme'] : 'https';
+                $domain .= '://' . $urlparts['host'] . (!empty($urlparts['port']) ? ':' . $urlparts['port'] : '');
+                $formurl = $domain . $formurl;
+            }
+
+            $formvalues[$hasinput] = $username;
+            $formvalues[$haspassword] = $password;
+
+            $mappedformvalues = array();
+            foreach ($formvalues as $k => $v) {
+                $mappedformvalues[] = rawurlencode($k) . '=' . rawurlencode($v);
+            }
+
+            $response = $curl->post($formurl, implode('&', $mappedformvalues), $options);
+
+            // Did we come back to ourselves?
+            $result = false;
+            $responseinfo = $curl->get_info();
+            if (strpos($responseinfo['url'], $CFG->wwwroot) === 0) {
+                // We were outright redirected back to somewhere in Moodle. This has to be successful.
+                $result = true;
+            } else if (!empty($responseinfo['redirect_url']) && strpos($responseinfo['redirect_url'], $CFG->wwwroot) === 0) {
+                // We were meant to be redirected back to somewhere in our Moodle - also successful.
+                $result = true;
+            } else {
+                // Some IdPs don't do anything so fancy. They leave us a form to click on.
+                $dom = new DOMDocument();
+                if ($dom->loadHTML($response)) {
+                    foreach ($dom->getElementsByTagName('form') as $form) {
+                        $action = $form->getAttribute('action');
+                        $action = html_entity_decode($action, ENT_QUOTES | ENT_HTML5);
+                        if (strpos($action, $CFG->wwwroot) === 0) {
+                            $result = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            @unlink($cookiefile);
+
+            // We also need to flag to the rest of the Shib auth library that we've taken this route.
+            // And do so in a way that cannot be influenced any other way.
+            if ($result) {
+                $this->frombackground = true;
+            }
+            return $result;
         } else {
             // If we are not, the user has used the manual login and the login name is
             // unknown, so we return false.
@@ -91,7 +262,19 @@ class auth_plugin_shibboleth extends auth_plugin_base {
         }
     }
 
+    /**
+     * Indicates if Moodle should update internal user records from external sources.
+     * Usually we should in the case of Shibboleth but not if we've merely authenticated for a token.
+     *
+     * @return bool true means automatically copy data from ext to user table.
+     */
+    public function is_synchronised_with_external() {
+        if ($this->frombackground) {
+            return false;
+        }
 
+        return parent::is_synchronised_with_external();
+    }
 
     /**
      * Returns the user information for 'external' users. In this case the
