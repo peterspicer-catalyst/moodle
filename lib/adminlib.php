@@ -3416,6 +3416,9 @@ class admin_setting_configduration extends admin_setting {
     /** @var int default duration unit */
     protected $defaultunit;
 
+    /** @var bool whether to allow zero duration as valid */
+    protected $allowzero;
+
     /**
      * Constructor
      * @param string $name unique ascii name, either 'mysetting' for settings that in config,
@@ -3424,11 +3427,13 @@ class admin_setting_configduration extends admin_setting {
      * @param string $description localised long description
      * @param mixed $defaultsetting string or array depending on implementation
      * @param int $defaultunit - day, week, etc. (in seconds)
+     * @param bool $allowzero - allow zero duration to be acceptable
      */
-    public function __construct($name, $visiblename, $description, $defaultsetting, $defaultunit = 86400) {
+    public function __construct($name, $visiblename, $description, $defaultsetting, $defaultunit = 86400, $allowzero = true) {
         if (is_number($defaultsetting)) {
             $defaultsetting = self::parse_seconds($defaultsetting);
         }
+        $this->allowzero = !empty($allowzero);
         $units = self::get_units();
         if (isset($units[$defaultunit])) {
             $this->defaultunit = $defaultunit;
@@ -3519,7 +3524,7 @@ class admin_setting_configduration extends admin_setting {
         }
 
         $seconds = (int)($data['v']*$data['u']);
-        if ($seconds < 0) {
+        if ($seconds < 0 || (!$this->allowzero && $seconds == 0)) {
             return get_string('errorsetting', 'admin');
         }
 

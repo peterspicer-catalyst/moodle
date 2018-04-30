@@ -52,7 +52,7 @@ other = html';
 $name = new lang_string('autosavefrequency', 'editor_atto');
 $desc = new lang_string('autosavefrequency_desc', 'editor_atto');
 $default = 60;
-$setting = new admin_setting_configduration('editor_atto/autosavefrequency', $name, $desc, $default);
+$setting = new admin_setting_configduration('editor_atto/autosavefrequency', $name, $desc, $default, 86400, false);
 $settings->add($setting);
 
 $ADMIN->add('editoratto', $settings);
