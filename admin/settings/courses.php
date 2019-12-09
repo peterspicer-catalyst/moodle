@@ -193,6 +193,9 @@ if ($hassiteconfig or has_any_capability($capabilities, $systemcontext)) {
         365 => new lang_string('numdays', '', 365)
     )));
 
+    $temp->add(new admin_setting_configcheckbox('backup/cleartemporaryfilesonfailure',
+            new lang_string('cleartemporaryfilesonfailure', 'backup'), '', 1));
+
     // General defaults section.
     $temp->add(new admin_setting_heading('generalsettings', new lang_string('generalsettings', 'backup'), ''));
     $temp->add(new admin_setting_configcheckbox_with_lock('backup/backup_general_users', new lang_string('generalusers','backup'), new lang_string('configgeneralusers','backup'), array('value'=>1, 'locked'=>0)));

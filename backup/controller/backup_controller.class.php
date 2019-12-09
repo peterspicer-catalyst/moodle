@@ -319,7 +319,20 @@ class backup_controller extends base_controller {
             $this->log('notifying plan about excluded activities by type', backup::LOG_DEBUG);
             $this->plan->set_excluding_activities();
         }
-        return $this->plan->execute();
+
+        try {
+            $result = $this->plan->execute();
+        } catch (moodle_exception $e) {
+            // If this fails, we might need to house-clean after us.
+            if (get_config('backup', 'cleartemporaryfilesonfailure')) {
+                \backup_helper::delete_backup_dir($this->get_backupid());
+            }
+
+            // And allow the exception to bubble up to be caught further up the chain.
+            throw $e;
+        }
+
+        return $result;
     }
 
     public function get_results() {
