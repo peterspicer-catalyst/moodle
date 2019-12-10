@@ -657,10 +657,16 @@ class navigation_node implements renderable {
      * @return string
      */
     public function get_content($shorttext=false) {
-        if ($shorttext && $this->shorttext!==null) {
-            return format_string($this->shorttext);
+        global $CFG;
+        if (!empty($CFG->filternavigationwithsystemcontext)) {
+            $options = ['context' => context_system::instance()];
         } else {
-            return format_string($this->text);
+            $options = null;
+        }
+        if ($shorttext && $this->shorttext!==null) {
+            return format_string($this->shorttext, null, $options);
+        } else {
+            return format_string($this->text, null, $options);
         }
     }
 
@@ -1923,11 +1929,16 @@ class global_navigation extends navigation_node {
      * @return void.
      */
     protected function add_category(stdClass $category, navigation_node $parent, $nodetype = self::TYPE_CATEGORY) {
+        global $CFG;
         if (array_key_exists($category->id, $this->addedcategories)) {
             return;
         }
         $url = new moodle_url('/course/index.php', array('categoryid' => $category->id));
-        $context = context_coursecat::instance($category->id);
+        if (!empty($CFG->filternavigationwithsystemcontext)) {
+            $context = context_system::instance();
+        } else {
+            $context = context_coursecat::instance($category->id);
+        }
         $categoryname = format_string($category->name, true, array('context' => $context));
         $categorynode = $parent->add($categoryname, $url, $nodetype, $categoryname, $category->id);
         if (empty($category->visible)) {
@@ -2138,7 +2149,12 @@ class global_navigation extends navigation_node {
             }
 
             // Prepare the default name and url for the node
-            $activityname = format_string($activity->name, true, array('context' => context_module::instance($activity->id)));
+            if (!empty($CFG->filternavigationwithsystemcontext)) {
+                $context = context_system::instance();
+            } else {
+                $context = context_module::instance($activity->id);
+            }
+            $activityname = format_string($activity->name, true, array('context' => $context));
             $action = new moodle_url($activity->url);
 
             // Check if the onclick property is set (puke!)
@@ -2590,8 +2606,13 @@ class global_navigation extends navigation_node {
         }
 
         $issite = ($course->id == $SITE->id);
-        $shortname = format_string($course->shortname, true, array('context' => $coursecontext));
-        $fullname = format_string($course->fullname, true, array('context' => $coursecontext));
+        if (!empty($CFG->filternavigationwithsystemcontext)) {
+            $displaycontext = context_system::instance();
+        } else {
+            $displaycontext = $coursecontext;
+        }
+        $shortname = format_string($course->shortname, true, array('context' => $displaycontext));
+        $fullname = format_string($course->fullname, true, array('context' => $displaycontext));
         // This is the name that will be shown for the course.
         $coursename = empty($CFG->navshowfullcoursenames) ? $shortname : $fullname;
 
@@ -2646,7 +2667,7 @@ class global_navigation extends navigation_node {
         $coursenode->showinflatnavigation = $coursetype == self::COURSE_MY;
 
         $coursenode->hidden = (!$course->visible);
-        $coursenode->title(format_string($course->fullname, true, array('context' => $coursecontext, 'escape' => false)));
+        $coursenode->title(format_string($course->fullname, true, array('context' => $displaycontext, 'escape' => false)));
         if ($canexpandcourse) {
             // This course can be expanded by the user, make it a branch to make the system aware that its expandable by ajax.
             $coursenode->nodetype = self::NODETYPE_BRANCH;
@@ -3574,13 +3595,21 @@ class navbar extends navigation_node {
         $cap = 'moodle/category:viewhiddencategories';
         $showcategories = core_course_category::count_all() > 1;
 
+        $systemcontext = context_system::instance();
+
         if ($showcategories) {
             foreach ($this->page->categories as $category) {
                 if (!$category->visible && !has_capability($cap, get_category_or_system_context($category->parent))) {
                     continue;
                 }
+
+                if (!empty($CFG->filternavigationwithsystemcontext)) {
+                    $displaycontext = $systemcontext;
+                } else {
+                    $displaycontext = context_coursecat::instance($category->id);
+                }
                 $url = new moodle_url('/course/index.php', array('categoryid' => $category->id));
-                $name = format_string($category->name, true, array('context' => context_coursecat::instance($category->id)));
+                $name = format_string($category->name, true, array('context' => $displaycontext));
                 $categorynode = breadcrumb_navigation_node::create($name, $url, self::TYPE_CATEGORY, null, $category->id);
                 if (!$category->visible) {
                     $categorynode->hidden = true;
@@ -3897,10 +3926,15 @@ class flat_navigation extends navigation_node_collection {
             $url = new moodle_url('/course/view.php', array('id' => $course->id));
 
             $coursecontext = context_course::instance($course->id, MUST_EXIST);
+            if (!empty($CFG->filternavigationwithsystemcontext)) {
+                $displaycontext = context_system::instance();
+            } else {
+                $displaycontext = $coursecontext;
+            }
             // This is the name that will be shown for the course.
             $coursename = empty($CFG->navshowfullcoursenames) ?
-                format_string($course->shortname, true, array('context' => $coursecontext)) :
-                format_string($course->fullname, true, array('context' => $coursecontext));
+                format_string($course->shortname, true, array('context' => $displaycontext)) :
+                format_string($course->fullname, true, array('context' => $displaycontext));
 
             $flat = new flat_navigation_node(navigation_node::create($coursename, $url), 0);
             $flat->key = 'coursehome';
